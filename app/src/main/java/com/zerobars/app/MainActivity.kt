@@ -51,9 +51,10 @@ fun MainScreen() {
     val logs by Dependencies.eventLogger.logs.collectAsState()
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            if (isGranted) {
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+        onResult = { permissions ->
+            val allGranted = permissions.values.all { it }
+            if (allGranted) {
                 startMonitoringService(context)
             }
         }
@@ -109,7 +110,8 @@ fun MainScreen() {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = if (isMonitoring) "Monitoring cellular network..." else "Monitoring paused",
-                    style = MaterialTheme.typography.bodyLarge
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (isMonitoring) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -120,16 +122,20 @@ fun MainScreen() {
                 if (isMonitoring) {
                     stopMonitoringService(context)
                 } else {
+                    val permissionsToRequest = mutableListOf<String>()
+
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+                        permissionsToRequest.add(Manifest.permission.READ_PHONE_STATE)
+                    }
+
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        if (ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.POST_NOTIFICATIONS
-                            ) == PackageManager.PERMISSION_GRANTED
-                        ) {
-                            startMonitoringService(context)
-                        } else {
-                            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                            permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
                         }
+                    }
+
+                    if (permissionsToRequest.isNotEmpty()) {
+                        permissionLauncher.launch(permissionsToRequest.toTypedArray())
                     } else {
                         startMonitoringService(context)
                     }

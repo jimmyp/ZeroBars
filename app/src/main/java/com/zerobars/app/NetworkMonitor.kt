@@ -5,6 +5,9 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.telephony.PhoneStateListener
+import android.telephony.ServiceState
+import android.telephony.TelephonyManager
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,36 +20,27 @@ class NetworkMonitor(
 
     private val connectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+    private val telephonyManager =
+        context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
 
-    private val _isConnected = MutableStateFlow(true) // Optimistic default
+    private val _isConnected = MutableStateFlow(false) // Default to false, let updates set true
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
     private val _isMonitoring = MutableStateFlow(false)
     val isMonitoring: StateFlow<Boolean> = _isMonitoring.asStateFlow()
 
-    private val availableNetworks = mutableSetOf<Network>()
+    private val phoneStateListener = object : PhoneStateListener() {
+        override fun onServiceStateChanged(serviceState: ServiceState?) {
+            super.onServiceStateChanged(serviceState)
+            val isServiceAvailable = serviceState?.state == ServiceState.STATE_IN_SERVICE
 
-    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) {
-            super.onAvailable(network)
-            synchronized(availableNetworks) {
-                val wasEmpty = availableNetworks.isEmpty()
-                availableNetworks.add(network)
-                if (wasEmpty) {
-                    _isConnected.value = true
-                    Log.d("NetworkMonitor", "Cellular Connected")
+            if (isServiceAvailable != _isConnected.value) {
+                _isConnected.value = isServiceAvailable
+                if (isServiceAvailable) {
+                    Log.d("NetworkMonitor", "Cellular Service Restored")
                     logger.log("Cellular Connection Restored")
-                }
-            }
-        }
-
-        override fun onLost(network: Network) {
-            super.onLost(network)
-            synchronized(availableNetworks) {
-                availableNetworks.remove(network)
-                if (availableNetworks.isEmpty()) {
-                    _isConnected.value = false
-                    Log.d("NetworkMonitor", "Cellular Lost")
+                } else {
+                    Log.d("NetworkMonitor", "Cellular Service Lost")
                     logger.log("Cellular Connection Lost!")
                 }
             }
@@ -56,15 +50,12 @@ class NetworkMonitor(
     fun startMonitoring() {
         if (_isMonitoring.value) return
         
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR)
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-        
         try {
-            // Registering callback. Note: This does not immediately return current state
-            // unless we also check active networks, but callback usually fires onAvailable immediately for existing networks.
-            connectivityManager.registerNetworkCallback(request, networkCallback)
+            telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_SERVICE_STATE)
+
+            // The listener will fire immediately with the current state, so no need for synchronous call
+            // which requires Location permissions on some API levels.
+
             _isMonitoring.value = true
             logger.log("Monitoring Started")
         } catch (e: Exception) {
@@ -77,11 +68,11 @@ class NetworkMonitor(
         if (!_isMonitoring.value) return
 
         try {
-            connectivityManager.unregisterNetworkCallback(networkCallback)
+            telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_NONE)
             _isMonitoring.value = false
             logger.log("Monitoring Stopped")
         } catch (e: Exception) {
-            // Already unregistered or not registered
+            // Error stopping
         }
     }
 }
